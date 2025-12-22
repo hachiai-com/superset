@@ -1,0 +1,254 @@
+name: Build and Deploy Superset
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'prod'
+        type: choice
+        options:
+          - prod
+
+env:
+  # Build configuration
+  BUILD_PROJECT_ID: v2-prod-project
+  DEPLOYMENT_NAME: superset
+  IMAGE_NAME: superset
+  HELM_RELEASE_NAME: superset
+  HELM_REPO_URL: https://apache.github.io/superset
+  NAMESPACE: superset
+  GKE_CLUSTER: prod-hachiai-h100-gpu-cluster
+  GKE_ZONE: northamerica-northeast2
+
+jobs:
+  validate-inputs:
+    name: Validate Inputs
+    runs-on: 
+      - self-hosted
+      - Linux
+      - X64
+    environment: ${{ github.event.inputs.environment }}
+    outputs:
+      environment: ${{ steps.validate.outputs.environment }}
+      build_project_id: ${{ steps.validate.outputs.build_project_id }}
+      deploy_project_id: ${{ steps.validate.outputs.deploy_project_id }}
+      gke_cluster: ${{ steps.validate.outputs.gke_cluster }}
+      gke_zone: ${{ steps.validate.outputs.gke_zone }}
+      namespace: ${{ steps.validate.outputs.namespace }}
+    steps:
+      - name: Validate and Set Environment Variables
+        id: validate
+        run: |
+          # Set environment variables based on input
+          ENVIRONMENT="${{ github.event.inputs.environment }}"
+          BUILD_PROJECT_ID="v2-prod-project"
+          
+          # Set environment-specific configuration
+          if [ "$ENVIRONMENT" = "prod" ]; then
+            DEPLOY_PROJECT_ID="v2-prod-project"
+            GKE_CLUSTER="prod-hachiai-h100-gpu-cluster"
+            GKE_ZONE="northamerica-northeast2"
+            NAMESPACE="superset"
+          else
+            echo "❌ Only 'prod' environment is supported"
+            exit 1
+          fi
+          
+          # Set image tag to commit SHA
+          IMAGE_TAG="${{ github.sha }}"
+          # Output variables
+          echo "environment=$ENVIRONMENT" >> $GITHUB_OUTPUT
+          echo "build_project_id=$BUILD_PROJECT_ID" >> $GITHUB_OUTPUT
+          echo "deploy_project_id=$DEPLOY_PROJECT_ID" >> $GITHUB_OUTPUT
+          echo "gke_cluster=$GKE_CLUSTER" >> $GITHUB_OUTPUT
+          echo "gke_zone=$GKE_ZONE" >> $GITHUB_OUTPUT
+          echo "namespace=$NAMESPACE" >> $GITHUB_OUTPUT
+          echo "✅ Environment: $ENVIRONMENT"
+          echo "✅ Build Project: $BUILD_PROJECT_ID"
+          echo "✅ Deploy Project: $DEPLOY_PROJECT_ID"
+          echo "✅ GKE Cluster: $GKE_CLUSTER"
+          echo "✅ GKE Zone: $GKE_ZONE"
+          echo "✅ Namespace: $NAMESPACE"
+          echo "✅ Image Tag: $IMAGE_TAG"
+          
+          # Debug: Show what was written to GITHUB_OUTPUT
+          echo "🔍 Debug: Contents of GITHUB_OUTPUT:"
+          cat $GITHUB_OUTPUT
+
+  build-and-push:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-latest
+    needs: validate-inputs
+    environment: ${{ needs.validate-inputs.outputs.environment }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref }}
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GOOGLE_CREDENTIALS_PROD }}
+      - name: Setup gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ needs.validate-inputs.outputs.build_project_id }}
+      - name: Configure Docker
+        run: |
+          gcloud --quiet auth configure-docker northamerica-northeast2-docker.pkg.dev
+      - name: Verify Docker Authentication
+        run: |
+          echo "Testing Docker authentication..."
+          docker pull hello-world
+          echo "✅ Docker authentication verified"
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: |
+            northamerica-northeast2-docker.pkg.dev/${{ needs.validate-inputs.outputs.build_project_id }}/llm-artifactory/${{ env.IMAGE_NAME }}:${{ github.sha }}
+            northamerica-northeast2-docker.pkg.dev/${{ needs.validate-inputs.outputs.build_project_id }}/llm-artifactory/${{ env.IMAGE_NAME }}:latest
+            northamerica-northeast2-docker.pkg.dev/${{ needs.validate-inputs.outputs.build_project_id }}/llm-artifactory/${{ env.IMAGE_NAME }}:prod-latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Output Image URI
+        run: |
+          echo "IMAGE_URI=northamerica-northeast2-docker.pkg.dev/${{ needs.validate-inputs.outputs.build_project_id }}/llm-artifactory/${{ env.IMAGE_NAME }}:${{ github.sha }}" >> $GITHUB_ENV
+          echo "✅ Built and pushed image: $IMAGE_URI"
+
+  deploy:
+    name: Deploy to GKE
+    runs-on: 
+      - self-hosted
+      - Linux
+      - X64
+    needs: [validate-inputs, build-and-push]
+    environment: ${{ needs.validate-inputs.outputs.environment }}
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.head_ref || github.ref }}
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v2
+      with:
+        credentials_json: ${{ secrets.GOOGLE_CREDENTIALS_PROD }}
+    - name: Setup gcloud CLI
+      uses: google-github-actions/setup-gcloud@v2
+      with:
+        project_id: ${{ needs.validate-inputs.outputs.deploy_project_id }}
+    - name: Get GKE Credentials
+      uses: google-github-actions/get-gke-credentials@v2
+      with:
+        cluster_name: ${{ needs.validate-inputs.outputs.gke_cluster }}
+        location: ${{ needs.validate-inputs.outputs.gke_zone }}
+    - name: Install kubectl
+      uses: azure/setup-kubectl@v4
+      with:
+        version: 'latest'
+    - name: Install Helm
+      uses: azure/setup-helm@v4
+      with:
+        version: 'latest'
+    - name: Add Superset Helm Repository
+      run: |
+        helm repo add superset ${{ env.HELM_REPO_URL }}
+        helm repo update
+        echo "✅ Superset Helm repository added and updated"
+    - name: Ensure Namespace Exists
+      run: |
+        echo "🔍 Ensuring namespace exists: ${{ needs.validate-inputs.outputs.namespace }}"
+        kubectl get ns ${{ needs.validate-inputs.outputs.namespace }} || kubectl create ns ${{ needs.validate-inputs.outputs.namespace }}
+    - name: Apply Certificate Resource
+      run: |
+        echo "🔍 Applying certificate resource..."
+        if [ -f "k8s/certificate.yaml" ]; then
+          kubectl apply -f k8s/certificate.yaml
+          echo "✅ Certificate resource applied"
+        else
+          echo "⚠️ Certificate file not found, skipping..."
+        fi
+    - name: Update Image Tag in Values
+      run: |
+        echo "🔄 Updating image tag in values.yaml..."
+        COMMIT_SHA="${{ github.sha }}"
+        IMAGE_URI="northamerica-northeast2-docker.pkg.dev/${{ needs.validate-inputs.outputs.build_project_id }}/llm-artifactory/${{ env.IMAGE_NAME }}:${COMMIT_SHA}"
+        
+        # Update the image tag in values.yaml using yq or sed
+        if command -v yq &> /dev/null; then
+          yq eval ".image.tag = \"${COMMIT_SHA}\"" -i k8s/values.yaml
+          yq eval ".image.repository = \"northamerica-northeast2-docker.pkg.dev/${{ needs.validate-inputs.outputs.build_project_id }}/llm-artifactory/${{ env.IMAGE_NAME }}\"" -i k8s/values.yaml
+        else
+          # Fallback to sed if yq is not available
+          sed -i.bak "s|tag:.*|tag: ${COMMIT_SHA}|g" k8s/values.yaml
+          sed -i.bak "s|repository:.*|repository: northamerica-northeast2-docker.pkg.dev/${{ needs.validate-inputs.outputs.build_project_id }}/llm-artifactory/${{ env.IMAGE_NAME }}|g" k8s/values.yaml
+        fi
+        
+        echo "✅ Updated image to: $IMAGE_URI"
+        echo "🔍 Updated values.yaml image section:"
+        grep -A 2 "image:" k8s/values.yaml || cat k8s/values.yaml | head -20
+    - name: Deploy Superset with Helm
+      run: |
+        echo "🚀 Deploying Superset to GKE cluster: ${{ needs.validate-inputs.outputs.gke_cluster }}"
+        echo "🚀 Environment: ${{ needs.validate-inputs.outputs.environment }}"
+        echo "🚀 Namespace: ${{ needs.validate-inputs.outputs.namespace }}"
+        echo "🚀 Image: northamerica-northeast2-docker.pkg.dev/${{ needs.validate-inputs.outputs.build_project_id }}/llm-artifactory/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+        
+        # Deploy using Helm
+        helm upgrade --install ${{ env.HELM_RELEASE_NAME }} superset/superset \
+          --namespace ${{ needs.validate-inputs.outputs.namespace }} \
+          --values k8s/values.yaml \
+          --wait \
+          --timeout 10m \
+          --set image.repository=northamerica-northeast2-docker.pkg.dev/${{ needs.validate-inputs.outputs.build_project_id }}/llm-artifactory/${{ env.IMAGE_NAME }} \
+          --set image.tag=${{ github.sha }}
+        
+        echo "✅ Helm deployment completed"
+    - name: Verify Deployment
+      run: |
+        echo "🔍 Verifying deployment..."
+        kubectl get pods -n ${{ needs.validate-inputs.outputs.namespace }} -l app.kubernetes.io/name=superset || kubectl get pods --all-namespaces | grep superset
+        kubectl get services -n ${{ needs.validate-inputs.outputs.namespace }} -o wide || kubectl get services --all-namespaces | grep superset
+        kubectl get ingress -n ${{ needs.validate-inputs.outputs.namespace }} || kubectl get ingress --all-namespaces | grep superset
+    - name: Health Check
+      run: |
+        echo "🏥 Performing health check..."
+        # Check if pods are ready
+        READY_PODS=$(kubectl get pods -n ${{ needs.validate-inputs.outputs.namespace }} -l app.kubernetes.io/name=superset -o jsonpath='{.items[*].status.conditions[?(@.type=="Ready")].status}' | grep -o True | wc -l || echo "0")
+        TOTAL_PODS=$(kubectl get pods -n ${{ needs.validate-inputs.outputs.namespace }} -l app.kubernetes.io/name=superset --no-headers 2>/dev/null | wc -l || echo "0")
+        echo "📊 Pods ready: $READY_PODS/$TOTAL_PODS"
+        
+        if [ "$READY_PODS" -gt "0" ]; then
+          echo "✅ At least one pod is ready"
+        else
+          echo "⚠️ No pods are ready yet"
+        fi
+
+  notify:
+    name: Notify Deployment Status
+    runs-on: ubuntu-latest
+    needs: [validate-inputs, build-and-push, deploy]
+    if: always()
+    steps:
+    - name: Deployment Summary
+      run: |
+        if [ "${{ needs.deploy.result }}" == "success" ]; then
+          echo "🎉 Deployment successful!"
+          echo "Environment: ${{ needs.validate-inputs.outputs.environment }}"
+          echo "Image: northamerica-northeast2-docker.pkg.dev/${{ needs.validate-inputs.outputs.build_project_id }}/llm-artifactory/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          echo "Cluster: ${{ needs.validate-inputs.outputs.gke_cluster }}"
+          echo "Namespace: ${{ needs.validate-inputs.outputs.namespace }}"
+          echo "Helm Release: ${{ env.HELM_RELEASE_NAME }}"
+        else
+          echo "❌ Deployment failed!"
+          echo "Check the logs above for more details."
+          exit 1
+        fi
+
