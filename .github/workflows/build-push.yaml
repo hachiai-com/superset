@@ -63,6 +63,7 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
+          target: lean
           push: true
           platforms: linux/amd64
           tags: |
@@ -71,6 +72,7 @@ jobs:
             northamerica-northeast2-docker.pkg.dev/${{ env.BUILD_PROJECT_ID }}/llm-artifactory/${{ env.IMAGE_NAME }}:prod-latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          load: false
       - name: Output Image URI
         run: |
           IMAGE_URI="northamerica-northeast2-docker.pkg.dev/${{ env.BUILD_PROJECT_ID }}/llm-artifactory/${{ env.IMAGE_NAME }}:${{ github.sha }}"
