@@ -69,10 +69,9 @@ jobs:
           tags: |
             northamerica-northeast2-docker.pkg.dev/${{ env.BUILD_PROJECT_ID }}/llm-artifactory/${{ env.IMAGE_NAME }}:${{ github.sha }}
             northamerica-northeast2-docker.pkg.dev/${{ env.BUILD_PROJECT_ID }}/llm-artifactory/${{ env.IMAGE_NAME }}:latest
-            northamerica-northeast2-docker.pkg.dev/${{ env.BUILD_PROJECT_ID }}/llm-artifactory/${{ env.IMAGE_NAME }}:prod-latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          load: false
+          no-cache: false
       - name: Output Image URI
         run: |
           IMAGE_URI="northamerica-northeast2-docker.pkg.dev/${{ env.BUILD_PROJECT_ID }}/llm-artifactory/${{ env.IMAGE_NAME }}:${{ github.sha }}"
@@ -81,7 +80,6 @@ jobs:
           echo "📦 Image tags:"
           echo "  - $IMAGE_URI"
           echo "  - northamerica-northeast2-docker.pkg.dev/${{ env.BUILD_PROJECT_ID }}/llm-artifactory/${{ env.IMAGE_NAME }}:latest"
-          echo "  - northamerica-northeast2-docker.pkg.dev/${{ env.BUILD_PROJECT_ID }}/llm-artifactory/${{ env.IMAGE_NAME }}:prod-latest"
 
   notify:
     name: Build Summary
