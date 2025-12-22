@@ -71,7 +71,8 @@ jobs:
             northamerica-northeast2-docker.pkg.dev/${{ env.BUILD_PROJECT_ID }}/llm-artifactory/${{ env.IMAGE_NAME }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          no-cache: false
+          provenance: false
+          sbom: false
       - name: Output Image URI
         run: |
           IMAGE_URI="northamerica-northeast2-docker.pkg.dev/${{ env.BUILD_PROJECT_ID }}/llm-artifactory/${{ env.IMAGE_NAME }}:${{ github.sha }}"
