@@ -10,6 +10,11 @@ on:
         type: choice
         options:
           - prod
+      branch:
+        description: 'Branch to build from (leave empty to use current branch)'
+        required: false
+        type: string
+        default: ''
   push:
     branches:
       - master
@@ -27,31 +32,6 @@ env:
   IMAGE_NAME: superset
 
 jobs:
-  validate-inputs:
-    name: Validate Inputs
-    runs-on: 
-      - self-hosted
-      - Linux
-      - X64
-    if: github.event_name == 'workflow_dispatch'
-    outputs:
-      environment: ${{ steps.validate.outputs.environment }}
-      build_project_id: ${{ steps.validate.outputs.build_project_id }}
-    steps:
-      - name: Validate and Set Environment Variables
-        id: validate
-        run: |
-          # Set environment variables based on input
-          ENVIRONMENT="${{ github.event.inputs.environment }}"
-          BUILD_PROJECT_ID="v2-prod-project"
-          
-          # Output variables
-          echo "environment=$ENVIRONMENT" >> $GITHUB_OUTPUT
-          echo "build_project_id=$BUILD_PROJECT_ID" >> $GITHUB_OUTPUT
-          echo "✅ Environment: $ENVIRONMENT"
-          echo "✅ Build Project: $BUILD_PROJECT_ID"
-          echo "✅ Image Tag: ${{ github.sha }}"
-
   build-and-push:
     name: Build and Push Docker Image
     runs-on: ubuntu-latest
@@ -59,17 +39,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.head_ref || github.ref }}
-      - name: Set Build Project ID
-        id: set-project
-        run: |
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            BUILD_PROJECT_ID="${{ needs.validate-inputs.outputs.build_project_id }}"
-          else
-            BUILD_PROJECT_ID="v2-prod-project"
-          fi
-          echo "build_project_id=$BUILD_PROJECT_ID" >> $GITHUB_ENV
-          echo "✅ Build Project: $BUILD_PROJECT_ID"
+          ref: ${{ github.event.inputs.branch != '' && github.event.inputs.branch || github.head_ref || github.ref }}
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
@@ -121,12 +91,12 @@ jobs:
       run: |
         if [ "${{ needs.build-and-push.result }}" == "success" ]; then
           echo "🎉 Build and push successful!"
-          echo "Image: northamerica-northeast2-docker.pkg.dev/v2-prod-project/llm-artifactory/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          echo "Image: northamerica-northeast2-docker.pkg.dev/${{ env.BUILD_PROJECT_ID }}/llm-artifactory/${{ env.IMAGE_NAME }}:${{ github.sha }}"
           echo "Commit: ${{ github.sha }}"
           echo "Branch: ${{ github.ref_name }}"
+          echo "Trigger: ${{ github.event_name }}"
         else
           echo "❌ Build and push failed!"
           echo "Check the logs above for more details."
           exit 1
         fi
-
