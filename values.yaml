@@ -28,7 +28,13 @@ redis:
     repository: redis
     tag: "7.4"
 
-# Superset Configuration
+# Superset Image Configuration
+image:
+  repository: northamerica-northeast2-docker.pkg.dev/v2-prod-project/llm-artifactory/superset
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+# Bootstrap Script
 bootstrapScript: |
   #!/bin/bash
   
@@ -206,3 +212,4 @@ init:
     lastname: User
     email: admin@hachiai.com
     password: "Hachiai@!Secure#Admin123"
+
