@@ -1,0 +1,208 @@
+# Superset Helm Chart Values
+# Domain: analytics.hachiai.com
+
+# PostgreSQL Configuration
+postgresql:
+  auth:
+    postgresqlPassword: "Superset@2024!Secure#Pass123"
+    database: superset
+  persistence:
+    enabled: true
+    size: 8Gi
+  image:
+    registry: docker.io
+    repository: postgres
+    tag: "16"
+
+# Redis Configuration
+# Password disabled since Redis is only accessible within the cluster (ClusterIP)
+redis:
+  auth:
+    enabled: false
+  master:
+    persistence:
+      enabled: true
+      size: 4Gi
+  image:
+    registry: docker.io
+    repository: redis
+    tag: "7.4"
+
+# Superset Configuration
+bootstrapScript: |
+  #!/bin/bash
+  
+  # Install system-level dependencies
+  apt-get update && apt-get install -y \
+    python3-dev \
+    default-libmysqlclient-dev \
+    build-essential \
+    pkg-config
+  
+  # Install required Python packages
+  uv pip install \
+    authlib \
+    psycopg2-binary \
+    mysqlclient \
+    pymongo \
+    elasticsearch-dbapi \
+    snowflake-sqlalchemy \
+    pybigquery \
+    setuptools \
+    sqlalchemy-redshift \
+  
+  # Create bootstrap file if it doesn't exist
+  if [ ! -f ~/bootstrap ]; then
+    echo "Running Superset with uid {{ .Values.runAsUser }}" > ~/bootstrap
+  fi
+
+# Extra environment variables for all Superset pods
+extraEnv:
+  REDIS_HOST: "superset-redis-master"
+  REDIS_PORT: "6379"
+
+configOverrides:
+  secret: |
+    SECRET_KEY = 'cmQL/zcT0Bzyy/Ava36qb58XLJlwEtkR/c37vudhPZKdPDY2LyEASKG6'
+  
+  proxy_fix: |
+    # This will make sure the redirect_uri is properly computed, even with SSL offloading
+    ENABLE_PROXY_FIX = True
+  
+  feature_flags: |
+    # Enable SQL Lab backend persistence
+    FEATURE_FLAGS = {
+        "SQLLAB_BACKEND_PERSISTENCE": True,
+    }
+  
+  performance: |
+    # Query timeout settings (in seconds)
+    SQLLAB_TIMEOUT = 60
+    SQLLAB_ASYNC_TIME_LIMIT_SEC = 60
+    SQL_MAX_ROW = 100000
+    
+    # Database query timeout
+    DB_SELECT_STAR_TIMEOUT = 10
+    
+    # Cache timeout
+    CACHE_DEFAULT_TIMEOUT = 300
+    
+    # Table discovery settings
+    # Enable table metadata refresh
+    ENABLE_TEMPLATE_PROCESSING = True
+    
+    # Database metadata refresh settings
+    # Allow async table metadata refresh
+    ENABLE_ASYNC_QUERIES = True
+  
+  redis_config: |
+    import os
+    from flask_caching.backends import RedisCache
+    
+    # Redis configuration without password (internal cluster access only)
+    # Try multiple ways to get Redis host (Kubernetes service discovery)
+    REDIS_HOST = (
+        os.getenv("SUPERSET_REDIS_MASTER_SERVICE_HOST") or
+        os.getenv("REDIS_HOST") or
+        "superset-redis-master"
+    )
+    REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
+    
+    # Celery broker and result backend without password
+    class CeleryConfig:
+        broker_url = f"redis://{REDIS_HOST}:{REDIS_PORT}/0"
+        result_backend = f"redis://{REDIS_HOST}:{REDIS_PORT}/0"
+        task_serializer = "json"
+        accept_content = ["json"]
+        result_serializer = "json"
+        timezone = "UTC"
+        enable_utc = True
+    
+    CELERY_CONFIG = CeleryConfig
+    
+    # Cache configuration without password
+    CACHE_CONFIG = {
+        "CACHE_TYPE": "RedisCache",
+        "CACHE_DEFAULT_TIMEOUT": 300,
+        "CACHE_KEY_PREFIX": "superset_",
+        "CACHE_REDIS_HOST": REDIS_HOST,
+        "CACHE_REDIS_PORT": REDIS_PORT,
+        "CACHE_REDIS_DB": 1,
+    }
+    
+    # Results backend for SQL Lab query results without password
+    RESULTS_BACKEND = RedisCache(
+        host=REDIS_HOST,
+        port=REDIS_PORT,
+        db=0,
+        key_prefix='superset_results',
+    )
+
+# Ingress Configuration
+ingress:
+  enabled: true
+  ingressClassName: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+  path: /
+  pathType: ImplementationSpecific
+  hosts:
+    - analytics.hachiai.com
+  tls:
+    - secretName: analytics-hachiai-tls
+      hosts:
+        - analytics.hachiai.com
+
+# Service Configuration
+service:
+  type: ClusterIP
+  port: 8088
+
+# Superset Node Configuration
+supersetNode:
+  replicaCount: 2
+  resources:
+    requests:
+      memory: "2Gi"
+      cpu: "1000m"
+    limits:
+      memory: "4Gi"
+      cpu: "2000m"
+  # extraEnv is now set at top level
+
+# Superset Worker Configuration
+supersetWorker:
+  replicaCount: 2
+  resources:
+    requests:
+      memory: "2Gi"
+      cpu: "1000m"
+    limits:
+      memory: "4Gi"
+      cpu: "2000m"
+  # extraEnv is now set at top level
+
+# Celery Beat Configuration (for scheduled tasks)
+supersetCeleryBeat:
+  enabled: true
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "200m"
+    limits:
+      memory: "1Gi"
+      cpu: "500m"
+  # extraEnv is now set at top level
+
+# Init Configuration
+init:
+  loadExamples: false
+  createAdmin: true
+  adminUser:
+    username: admin
+    firstname: Admin
+    lastname: User
+    email: admin@hachiai.com
+    password: "Hachiai@!Secure#Admin123"
