@@ -79,58 +79,67 @@ jobs:
           echo "🔍 Debug: Contents of GITHUB_OUTPUT:"
           cat $GITHUB_OUTPUT
 
-  deploy:
-    name: Build and Deploy to GKE
+  build-and-push:
+    name: Build and Push Docker Image
     runs-on: ubuntu-latest
-    needs: [validate-inputs]
+    needs: validate-inputs
+    environment: ${{ needs.validate-inputs.outputs.environment }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.branch != '' && github.event.inputs.branch || github.head_ref || github.ref }}
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GOOGLE_CREDENTIALS_PROD }}
+      - name: Setup gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ needs.validate-inputs.outputs.build_project_id }}
+      - name: Configure Docker
+        run: |
+          gcloud --quiet auth configure-docker northamerica-northeast2-docker.pkg.dev
+      - name: Verify Docker Authentication
+        run: |
+          echo "Testing Docker authentication..."
+          docker pull hello-world
+          echo "✅ Docker authentication verified"
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: |
+            northamerica-northeast2-docker.pkg.dev/${{ needs.validate-inputs.outputs.build_project_id }}/llm-artifactory/${{ env.IMAGE_NAME }}:${{ github.sha }}
+            northamerica-northeast2-docker.pkg.dev/${{ needs.validate-inputs.outputs.build_project_id }}/llm-artifactory/${{ env.IMAGE_NAME }}:latest
+            northamerica-northeast2-docker.pkg.dev/${{ needs.validate-inputs.outputs.build_project_id }}/llm-artifactory/${{ env.IMAGE_NAME }}:prod-latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Output Image URI
+        run: |
+          echo "IMAGE_URI=northamerica-northeast2-docker.pkg.dev/${{ needs.validate-inputs.outputs.build_project_id }}/llm-artifactory/${{ env.IMAGE_NAME }}:${{ github.sha }}" >> $GITHUB_ENV
+          echo "✅ Built and pushed image: $IMAGE_URI"
+
+  deploy:
+    name: Deploy to GKE
+    runs-on: ubuntu-latest
+    needs: [validate-inputs, build-and-push]
     environment: ${{ needs.validate-inputs.outputs.environment }}
     steps:
     - name: Checkout
       uses: actions/checkout@v4
       with:
         ref: ${{ github.event.inputs.branch != '' && github.event.inputs.branch || github.head_ref || github.ref }}
-    - name: Authenticate to Google Cloud (Build)
+    - name: Authenticate to Google Cloud
       uses: google-github-actions/auth@v2
       with:
         credentials_json: ${{ secrets.GOOGLE_CREDENTIALS_PROD }}
-    - name: Setup gcloud CLI (Build)
-      uses: google-github-actions/setup-gcloud@v2
-      with:
-        project_id: ${{ needs.validate-inputs.outputs.build_project_id }}
-    - name: Configure Docker
-      run: |
-        gcloud --quiet auth configure-docker northamerica-northeast2-docker.pkg.dev
-    - name: Verify Docker Authentication
-      run: |
-        echo "Testing Docker authentication..."
-        docker pull hello-world
-        echo "✅ Docker authentication verified"
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-    - name: Build and Push Docker Image
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        file: ./Dockerfile
-        target: lean
-        push: true
-        platforms: linux/amd64
-        tags: |
-          northamerica-northeast2-docker.pkg.dev/${{ needs.validate-inputs.outputs.build_project_id }}/llm-artifactory/${{ env.IMAGE_NAME }}:${{ github.sha }}
-          northamerica-northeast2-docker.pkg.dev/${{ needs.validate-inputs.outputs.build_project_id }}/llm-artifactory/${{ env.IMAGE_NAME }}:latest
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-        provenance: false
-        sbom: false
-    - name: Output Image URI
-      run: |
-        echo "IMAGE_URI=northamerica-northeast2-docker.pkg.dev/${{ needs.validate-inputs.outputs.build_project_id }}/llm-artifactory/${{ env.IMAGE_NAME }}:${{ github.sha }}" >> $GITHUB_ENV
-        echo "✅ Built and pushed image: $IMAGE_URI"
-    - name: Authenticate to Google Cloud (Deploy)
-      uses: google-github-actions/auth@v2
-      with:
-        credentials_json: ${{ secrets.GOOGLE_CREDENTIALS_PROD }}
-    - name: Setup gcloud CLI (Deploy)
+    - name: Setup gcloud CLI
       uses: google-github-actions/setup-gcloud@v2
       with:
         project_id: ${{ needs.validate-inputs.outputs.deploy_project_id }}
@@ -198,47 +207,15 @@ jobs:
           --wait \
           --timeout 10m \
           --set image.repository=northamerica-northeast2-docker.pkg.dev/${{ needs.validate-inputs.outputs.build_project_id }}/llm-artifactory/${{ env.IMAGE_NAME }} \
-          --set image.tag=${{ github.sha }} \
-          --set image.pullPolicy=Always
+          --set image.tag=${{ github.sha }}
         
         echo "✅ Helm deployment completed"
-        
-        # Force pod restart to ensure new image is pulled
-        echo "🔄 Forcing pod rollout to ensure new image is used..."
-        kubectl rollout restart deployment/${{ env.HELM_RELEASE_NAME }} -n ${{ needs.validate-inputs.outputs.namespace }} || echo "⚠️ Rollout restart failed, continuing..."
-        
-        # Wait for rollout to complete
-        echo "⏳ Waiting for rollout to complete..."
-        kubectl rollout status deployment/${{ env.HELM_RELEASE_NAME }} -n ${{ needs.validate-inputs.outputs.namespace }} --timeout=300s || echo "⚠️ Rollout status check failed"
     - name: Verify Deployment
       run: |
         echo "🔍 Verifying deployment..."
         kubectl get pods -n ${{ needs.validate-inputs.outputs.namespace }} -l app.kubernetes.io/name=superset || kubectl get pods --all-namespaces | grep superset
         kubectl get services -n ${{ needs.validate-inputs.outputs.namespace }} -o wide || kubectl get services --all-namespaces | grep superset
         kubectl get ingress -n ${{ needs.validate-inputs.outputs.namespace }} || kubectl get ingress --all-namespaces | grep superset
-        
-        echo ""
-        echo "🔍 Verifying deployed image tag..."
-        EXPECTED_IMAGE="northamerica-northeast2-docker.pkg.dev/${{ needs.validate-inputs.outputs.build_project_id }}/llm-artifactory/${{ env.IMAGE_NAME }}:${{ github.sha }}"
-        echo "Expected image: $EXPECTED_IMAGE"
-        
-        # Get actual image from deployment
-        ACTUAL_IMAGE=$(kubectl get deployment ${{ env.HELM_RELEASE_NAME }} -n ${{ needs.validate-inputs.outputs.namespace }} -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || echo "not found")
-        echo "Actual deployed image: $ACTUAL_IMAGE"
-        
-        if [[ "$ACTUAL_IMAGE" == *"${{ github.sha }}"* ]]; then
-          echo "✅ Image tag matches commit SHA"
-        elif [[ "$ACTUAL_IMAGE" == *"latest"* ]]; then
-          echo "⚠️ WARNING: Deployment is using 'latest' tag instead of commit SHA!"
-          echo "💡 This might cause issues. The --set flag should have overridden this."
-        else
-          echo "⚠️ Image tag verification unclear"
-        fi
-        
-        # Also check pod images
-        echo ""
-        echo "🔍 Pod images:"
-        kubectl get pods -n ${{ needs.validate-inputs.outputs.namespace }} -l app.kubernetes.io/name=superset -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.containers[0].image}{"\n"}{end}' || echo "Could not get pod images"
     - name: Health Check
       run: |
         echo "🏥 Performing health check..."
@@ -256,7 +233,7 @@ jobs:
   notify:
     name: Notify Deployment Status
     runs-on: ubuntu-latest
-    needs: [validate-inputs, deploy]
+    needs: [validate-inputs, build-and-push, deploy]
     if: always()
     steps:
     - name: Deployment Summary
@@ -273,3 +250,4 @@ jobs:
           echo "Check the logs above for more details."
           exit 1
         fi
+

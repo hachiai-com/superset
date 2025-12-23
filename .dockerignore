@@ -43,6 +43,9 @@ superset-frontend/cypress-base/
 superset-frontend/coverage/
 superset-frontend/.temp_cache/
 superset/static/assets/
+# Allow custom branding assets to be included in Docker image
+!superset/static/assets/images/hachiaiLogo.png
+!superset/static/assets/images/favicon.png
 superset-websocket/dist/
 venv
 .venv

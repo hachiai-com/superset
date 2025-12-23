@@ -73,15 +73,14 @@ services:
     depends_on:
       superset-init:
         condition: service_completed_successfully
-    # Mount custom branding assets into the container (logo + favicon)
-    # Files live in the host repo under superset/static/assets/images/
-    # so they are available despite .dockerignore excluding static assets from the build context.
-    # Adjust paths if you rename assets.
     volumes:
       - ./docker:/app/docker
       - superset_home:/app/superset_home
-      - ./superset/static/assets/images/hachiaiLogo.png:/app/superset/static/assets/images/hachiaiLogo.png:ro
-      - ./superset/static/assets/images/favicon.png:/app/superset/static/assets/images/favicon.png:ro
+    # Optional: Mount custom branding assets for local development (hot-reload without rebuild)
+    # For production deployment, assets are baked into the Docker image via Dockerfile
+    # Uncomment below lines for local dev only:
+    # - ./superset/static/assets/images/hachiaiLogo.png:/app/superset/static/assets/images/hachiaiLogo.png:ro
+    # - ./superset/static/assets/images/favicon.png:/app/superset/static/assets/images/favicon.png:ro
 
   superset-init:
     container_name: superset_init
