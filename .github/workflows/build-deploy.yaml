@@ -30,10 +30,7 @@ env:
 jobs:
   validate-inputs:
     name: Validate Inputs
-    runs-on: 
-      - self-hosted
-      - Linux
-      - X64
+    runs-on: ubuntu-latest
     environment: ${{ github.event.inputs.environment }}
     outputs:
       environment: ${{ steps.validate.outputs.environment }}
@@ -84,10 +81,7 @@ jobs:
 
   deploy:
     name: Build and Deploy to GKE
-    runs-on: 
-      - self-hosted
-      - Linux
-      - X64
+    runs-on: ubuntu-latest
     needs: [validate-inputs]
     environment: ${{ needs.validate-inputs.outputs.environment }}
     steps:
@@ -261,10 +255,7 @@ jobs:
 
   notify:
     name: Notify Deployment Status
-    runs-on: 
-      - self-hosted
-      - Linux
-      - X64
+    runs-on: ubuntu-latest
     needs: [validate-inputs, deploy]
     if: always()
     steps:
@@ -282,4 +273,3 @@ jobs:
           echo "Check the logs above for more details."
           exit 1
         fi
-
