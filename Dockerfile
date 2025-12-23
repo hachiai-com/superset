@@ -219,16 +219,6 @@ COPY --from=superset-node /app/superset/static/assets superset/static/assets
 
 # TODO, when the next version comes out, use --exclude superset/translations
 COPY superset superset
-
-# Copy custom branding assets (logo + favicon) if they exist in build context
-# These override the default Superset branding
-# Using shell to handle optional files gracefully
-RUN if [ -f superset/static/assets/images/hachiaiLogo.png ]; then \
-        cp superset/static/assets/images/hachiaiLogo.png /app/superset/static/assets/images/hachiaiLogo.png; \
-    fi && \
-    if [ -f superset/static/assets/images/favicon.png ]; then \
-        cp superset/static/assets/images/favicon.png /app/superset/static/assets/images/favicon.png; \
-    fi
 # TODO in the meantime, remove the .po files
 RUN rm superset/translations/*/*/*.po
 
