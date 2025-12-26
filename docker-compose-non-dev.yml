@@ -73,7 +73,14 @@ services:
     depends_on:
       superset-init:
         condition: service_completed_successfully
-    volumes: *superset-volumes
+    volumes:
+      - ./docker:/app/docker
+      - superset_home:/app/superset_home
+    # Optional: Mount custom branding assets for local development (hot-reload without rebuild)
+    # For production deployment, assets are baked into the Docker image via Dockerfile
+    # Uncomment below lines for local dev only:
+    # - ./superset/static/assets/images/hachiaiLogo.png:/app/superset/static/assets/images/hachiaiLogo.png:ro
+    # - ./superset/static/assets/images/favicon.png:/app/superset/static/assets/images/favicon.png:ro
 
   superset-init:
     container_name: superset_init
